@@ -7,7 +7,6 @@ import net.minecraftforge.fml.common.Mod;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.lang.reflect.Method;
 
 /**
  * Explosion Overhaul の「Start chunk scanning?」プロンプトを出さずに、サーバ起動時へ自動で答える。
@@ -20,10 +19,15 @@ import java.lang.reflect.Method;
  *
  * <p>やること: {@code ServerStartedEvent} で
  * <ul>
- *   <li>保存済みの索引があれば {@code loadExistingData()}</li>
- *   <li>無ければ {@code startManualScan()}</li>
+ *   <li>保存済みの索引があれば {@code loadExistingData()}（走査し直さない）</li>
+ *   <li>無ければ {@code forceServerScan(server)}（プロンプトを介さず直接走らせる）</li>
  * </ul>
- * を呼ぶ。プロンプトは「まだ決まっていない」ときだけ出るので、先に決めてしまえば出ない。
+ *
+ * <p>⚠ <b>{@code startManualScan()} を呼んではいけない</b>（2026-08-03 に踏んだ）。
+ * あの入口は先頭で {@code waitingForUserInput && pendingScanLevel != null} を見ており、
+ * この2つは <b>OP が参加してプロンプトが出た瞬間</b>に初めて真になる。
+ * {@code ServerStartedEvent} の時点では誰も居ないので何もせず return し、
+ * <b>ログには「答えた」と出るのに1チャンクも走査されない</b>という形になる。
  *
  * <p>⚠ <b>すべてリフレクションで呼ぶ。</b> Explosion Overhaul を抜いてもこの MOD が
  * 起動を止めないようにするため（当部は MOD の抜き差しが多い）。対象が見つからなければ黙って何もしない。
@@ -43,12 +47,24 @@ public class EOScanGuard {
         MinecraftServer server = event.getServer();
         try {
             Class<?> mgr = Class.forName(TARGET);
-            Method hasSaveFile = mgr.getMethod("hasSaveFile", MinecraftServer.class);
-            boolean saved = (Boolean) hasSaveFile.invoke(null, server);
-            String call = saved ? "loadExistingData" : "startManualScan";
-            mgr.getMethod(call).invoke(null);
-            LOG.info("[eo_scanguard] チャンク走査の可否を自動で答えた: {}（保存済みの索引: {}）",
-                    call, saved ? "あり" : "なし");
+            boolean saved = (Boolean) mgr.getMethod("hasSaveFile", MinecraftServer.class)
+                    .invoke(null, server);
+            if (saved) {
+                // 保存済みの索引があるなら読むだけ。走査し直さない
+                mgr.getMethod("loadExistingData").invoke(null);
+                LOG.info("[eo_scanguard] 保存済みの索引を読み込ませた（走査はしない）");
+                return;
+            }
+            // ⚠ ここで startManualScan() を呼んではいけない（2026-08-03 に踏んだ）。
+            //   あの入口は先頭で `waitingForUserInput && pendingScanLevel != null` を見ており、
+            //   この2つは **OP が参加してプロンプトが出た瞬間** に初めて真になる。
+            //   ServerStartedEvent の時点では誰も居ないので **何もせず return** する。
+            //   ログに「答えた」と出るのに1チャンクも走査されない、という形で気づけなかった。
+            //
+            //   forceServerScan(server) は resetScanState() ＋ startServerScan(server) で、
+            //   **プロンプトを介さず直接走らせる**（`starting server-wide scan for all dimensions`）。
+            mgr.getMethod("forceServerScan", MinecraftServer.class).invoke(null, server);
+            LOG.info("[eo_scanguard] 保存済みの索引が無いので走査を直接開始した（forceServerScan）");
         } catch (ClassNotFoundException e) {
             LOG.info("[eo_scanguard] Explosion Overhaul が入っていないので何もしない");
         } catch (Throwable t) {
