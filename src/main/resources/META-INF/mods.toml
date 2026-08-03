@@ -1,0 +1,24 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="All Rights Reserved (club internal)"
+
+[[mods]]
+    modId="eo_scanguard"
+    version="1.0.0"
+    displayName="EO ScanGuard"
+    authors="マイクラ部"
+    description="Explosion Overhaul のチャンク走査の可否に、サーバ起動時へ自動で答える。OP に毎回プロンプトを出させないため。"
+
+[[dependencies.eo_scanguard]]
+    modId="forge"
+    mandatory=true
+    versionRange="[47,)"
+    ordering="NONE"
+    side="SERVER"
+
+[[dependencies.eo_scanguard]]
+    modId="explosionoverhaul"
+    mandatory=false
+    versionRange="[0,)"
+    ordering="AFTER"
+    side="SERVER"
