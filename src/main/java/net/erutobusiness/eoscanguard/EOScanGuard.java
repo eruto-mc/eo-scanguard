@@ -50,9 +50,31 @@ public class EOScanGuard {
             boolean saved = (Boolean) mgr.getMethod("hasSaveFile", MinecraftServer.class)
                     .invoke(null, server);
             if (saved) {
-                // 保存済みの索引があるなら読むだけ。走査し直さない
+                // 保存済みの索引があるなら読むだけ。走査し直さない。
+                //
+                // ⚠⚠ **`loadExistingData()` も素で呼ぶと何もしない**（2026-08-05 に踏んだ。
+                //    2026-08-03 に startManualScan() で踏んだのと同じ罠が、読み込み側にも在った）。
+                //    先頭が `if (!waitingForLoadDecision) return;` で、この旗が立つのは
+                //    **OP が参加して確認画面が出た瞬間**だけ。起動時は誰も居ないので素通りし、
+                //    それでもこちらは「読み込ませた」と書いていた＝**嘘のログ**。
+                //    実害は大きく、`serverScanDecisionMade` が false のままだと
+                //    **`onChunkLoad` の索引追加まで止まる**（事前生成した地形が1件も索引に入らない）。
+                //
+                //    → OP が「読み込む」を選んだのと同じ状態を先に作ってから呼ぶ。
+                setField(mgr, "pendingScanLevel", server.overworld());
+                setField(mgr, "waitingForLoadDecision", true);
                 mgr.getMethod("loadExistingData").invoke(null);
-                LOG.info("[eo_scanguard] 保存済みの索引を読み込ませた（走査はしない）");
+
+                // ⚠ **ログの文言で「やった」と言わない。** 旗を読み直して確かめる
+                boolean decided = (Boolean) readField(mgr, "serverScanDecisionMade");
+                if (decided) {
+                    LOG.info("[eo_scanguard] 保存済みの索引を読み込ませた（走査はしない）。"
+                            + "以後 onChunkLoad の索引追加も動く");
+                } else {
+                    LOG.error("[eo_scanguard] 索引を読ませたのに決定の旗が立っていない。"
+                            + "OP へ確認画面が出る／新しい地形が索引されない状態のまま。"
+                            + "上流の版が変わった可能性があるので mod-notes を見ること");
+                }
                 return;
             }
             // ⚠ ここで startManualScan() を呼んではいけない（2026-08-03 に踏んだ）。
@@ -72,5 +94,19 @@ public class EOScanGuard {
             //    プロンプトが復活するだけで済むようにする
             LOG.warn("[eo_scanguard] 自動応答に失敗した（上流の版が変わった？）: {}", t.toString());
         }
+    }
+
+    /** private な静的フィールドへ書く（上流に公開の入口が無いため）。 */
+    private static void setField(Class<?> owner, String name, Object value) throws Exception {
+        java.lang.reflect.Field f = owner.getDeclaredField(name);
+        f.setAccessible(true);
+        f.set(null, value);
+    }
+
+    /** private な静的フィールドを読む（「やったつもり」を防ぐための確認用）。 */
+    private static Object readField(Class<?> owner, String name) throws Exception {
+        java.lang.reflect.Field f = owner.getDeclaredField(name);
+        f.setAccessible(true);
+        return f.get(null);
     }
 }
