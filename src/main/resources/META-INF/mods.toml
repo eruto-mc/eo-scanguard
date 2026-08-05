@@ -4,7 +4,7 @@ license="All Rights Reserved (club internal)"
 
 [[mods]]
     modId="eo_scanguard"
-    version="1.0.0"
+    version="${file.jarVersion}"
     displayName="EO ScanGuard"
     authors="マイクラ部"
     description="Explosion Overhaul のチャンク走査の可否に、サーバ起動時へ自動で答える。OP に毎回プロンプトを出させないため。"

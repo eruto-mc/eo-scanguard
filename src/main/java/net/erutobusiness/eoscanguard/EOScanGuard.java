@@ -49,6 +49,22 @@ public class EOScanGuard {
             Class<?> mgr = Class.forName(TARGET);
             boolean saved = (Boolean) mgr.getMethod("hasSaveFile", MinecraftServer.class)
                     .invoke(null, server);
+            if (saved && terrainGrewSinceLastScan(server)) {
+                // ⚠ **索引より新しい地形があるなら、読むだけでは足りない**（2026-08-05 に実測）。
+                //    `onChunkLoad` は Chunky が事前生成したチャンクを拾わない:
+                //    16分ぶん（約7,600チャンク）走らせても、停止時の保存で索引は
+                //    43,237 バイト・地上54件のまま1件も増えなかった。
+                //    索引に載らない＝**自然生成の鍾乳石とガラスが爆発に反応しない**。
+                //    （自分で置いたランプ等は onBlockPlaced が拾うので影響しない）
+                //
+                //    前回走査したときより地形（.mca の合計バイト数）が5%以上増えていれば走査し直す。
+                //    走査は当部の設定で毎秒1,000チャンクなので、6万チャンクでも1分ほど。
+                //    事前生成が終われば地形が増えなくなるので、この判定は自然に止む。
+                mgr.getMethod("forceServerScan", MinecraftServer.class).invoke(null, server);
+                writeMarker(server, terrainBytes(server));
+                LOG.info("[eo_scanguard] 前回より地形が増えているので走査し直す（forceServerScan）");
+                return;
+            }
             if (saved) {
                 // 保存済みの索引があるなら読むだけ。走査し直さない。
                 //
@@ -86,6 +102,7 @@ public class EOScanGuard {
             //   forceServerScan(server) は resetScanState() ＋ startServerScan(server) で、
             //   **プロンプトを介さず直接走らせる**（`starting server-wide scan for all dimensions`）。
             mgr.getMethod("forceServerScan", MinecraftServer.class).invoke(null, server);
+            writeMarker(server, terrainBytes(server));
             LOG.info("[eo_scanguard] 保存済みの索引が無いので走査を直接開始した（forceServerScan）");
         } catch (ClassNotFoundException e) {
             LOG.info("[eo_scanguard] Explosion Overhaul が入っていないので何もしない");
@@ -93,6 +110,82 @@ public class EOScanGuard {
             // ⚠ ここで落ちてもサーバは止めない。上流の版が変わってメソッド名が変わったら
             //    プロンプトが復活するだけで済むようにする
             LOG.warn("[eo_scanguard] 自動応答に失敗した（上流の版が変わった？）: {}", t.toString());
+        }
+    }
+
+    /** 走査したときの地形の量を覚えておくファイル。⚠ 索引そのものの更新時刻は使えない（下記）。 */
+    private static final String MARKER = "eo_scanguard-last-scan.txt";
+
+    /**
+     * 前回の走査より地形が増えているか。
+     *
+     * <p>⚠⚠ **索引ファイルの更新時刻で判定してはいけない**（2026-08-05 に一度そう書いて外した）。
+     * 索引は**サーバ停止のたびに丸ごと書き直される**ので、中身が古いままでも
+     * 更新時刻はいつも新しい。ワールドの保存と同じ瞬間に書かれるため、
+     * region ファイルと比べても差が出ない。
+     *
+     * <p>そこで**地形の量**（region ファイル `.mca` の合計バイト数）を、走査したときの値として
+     * 別ファイルに書いておき、次の起動でいまの値と比べる。5% 増えていれば走査し直す。
+     * 事前生成が終われば増えなくなるので、この判定は自然に止む。
+     */
+    private static boolean terrainGrewSinceLastScan(MinecraftServer server) {
+        try {
+            long now = terrainBytes(server);
+            long then = readMarker(server);
+            if (now <= 0) return false;
+            if (then <= 0) {
+                // 記録が無い＝この仕組みを入れる前の索引。**一度は走査し直す**
+                LOG.info("[eo_scanguard] 前回の走査時の地形量が記録されていない（地形 {} MB）", now / 1_000_000L);
+                return true;
+            }
+            boolean grew = now > then + then / 20L;   // 5% 増
+            LOG.info("[eo_scanguard] 地形量 前回 {} MB → いま {} MB（{}）",
+                    then / 1_000_000L, now / 1_000_000L, grew ? "走査し直す" : "変化なし");
+            return grew;
+        } catch (Throwable t) {
+            LOG.warn("[eo_scanguard] 地形量を比べられなかった: {}", t.toString());
+            return false;
+        }
+    }
+
+    /** ワールド配下の `.mca` の合計バイト数。 */
+    private static long terrainBytes(MinecraftServer server) throws Exception {
+        java.nio.file.Path world =
+                server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT);
+        final long[] total = {0L};
+        try (java.util.stream.Stream<java.nio.file.Path> s = java.nio.file.Files.walk(world, 4)) {
+            s.filter(p -> p.getFileName().toString().endsWith(".mca")).forEach(p -> {
+                try {
+                    total[0] += java.nio.file.Files.size(p);
+                } catch (Exception ignored) {
+                }
+            });
+        }
+        return total[0];
+    }
+
+    private static java.nio.file.Path markerPath(MinecraftServer server) {
+        return server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
+                .resolve("config").resolve("explosionoverhaul").resolve(MARKER);
+    }
+
+    private static long readMarker(MinecraftServer server) {
+        try {
+            java.nio.file.Path p = markerPath(server);
+            if (!java.nio.file.Files.exists(p)) return 0L;
+            return Long.parseLong(new String(java.nio.file.Files.readAllBytes(p), "UTF-8").trim());
+        } catch (Throwable t) {
+            return 0L;
+        }
+    }
+
+    private static void writeMarker(MinecraftServer server, long bytes) {
+        try {
+            java.nio.file.Path p = markerPath(server);
+            java.nio.file.Files.createDirectories(p.getParent());
+            java.nio.file.Files.write(p, String.valueOf(bytes).getBytes("UTF-8"));
+        } catch (Throwable t) {
+            LOG.warn("[eo_scanguard] 走査時の地形量を書けなかった: {}", t.toString());
         }
     }
 
