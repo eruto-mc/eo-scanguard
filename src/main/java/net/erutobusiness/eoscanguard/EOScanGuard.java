@@ -89,7 +89,7 @@ public class EOScanGuard {
                 } else {
                     LOG.error("[eo_scanguard] 索引を読ませたのに決定の旗が立っていない。"
                             + "OP へ確認画面が出る／新しい地形が索引されない状態のまま。"
-                            + "上流の版が変わった可能性があるので mod-notes を見ること");
+                            + "元の MOD のバージョンが変わった可能性があるので mod-notes を見ること");
                 }
                 return;
             }
@@ -107,9 +107,9 @@ public class EOScanGuard {
         } catch (ClassNotFoundException e) {
             LOG.info("[eo_scanguard] Explosion Overhaul が入っていないので何もしない");
         } catch (Throwable t) {
-            // ⚠ ここで落ちてもサーバは止めない。上流の版が変わってメソッド名が変わったら
+            // ⚠ ここで落ちてもサーバは止めない。元の MOD のバージョンが変わってメソッド名が変わったら
             //    プロンプトが復活するだけで済むようにする
-            LOG.warn("[eo_scanguard] 自動応答に失敗した（上流の版が変わった？）: {}", t.toString());
+            LOG.warn("[eo_scanguard] 自動応答に失敗した（元の MOD のバージョンが変わった？）: {}", t.toString());
         }
     }
 
@@ -189,7 +189,7 @@ public class EOScanGuard {
         }
     }
 
-    /** private な静的フィールドへ書く（上流に公開の入口が無いため）。 */
+    /** private な静的フィールドへ書く（元の MOD に公開の入口が無いため）。 */
     private static void setField(Class<?> owner, String name, Object value) throws Exception {
         java.lang.reflect.Field f = owner.getDeclaredField(name);
         f.setAccessible(true);
